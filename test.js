@@ -18,7 +18,7 @@ describe('GrcSlack Batch Error Logging', () => {
   let mockCaller
   let mockConf
 
-  beforeEach(() => {
+  beforeEach(async () => {
     mockCaller = {
       grc_bfx: {
         req: jest.fn().mockResolvedValue({ success: true })
@@ -41,6 +41,7 @@ describe('GrcSlack Batch Error Logging', () => {
     grcSlack = new GrcSlack(mockCaller, { conf: mockConf }, {})
 
     grcSlack._errorBatch.clear()
+
     if (grcSlack._errorBatchTimer) {
       clearInterval(grcSlack._errorBatchTimer)
       grcSlack._errorBatchTimer = null
@@ -130,17 +131,17 @@ describe('GrcSlack Batch Error Logging', () => {
     })
   })
 
-  describe('batchLogErrorToSlack', () => {
+  describe('logErrorEnqueue', () => {
     it('should create new error entry for first occurrence', async () => {
       const err = new Error('Test error')
       const payload = { to: 'test@example.com', type: 'notification' }
 
-      await grcSlack.batchLogErrorToSlack('test-channel', err, 'testFunction', payload)
+      await grcSlack.logErrorEnqueue('test-channel', err, 'testFunction', payload)
 
-      expect(grcSlack._errorBatch.size).toBe(1)
+      expect(grcSlack._errorBatch.keys.length).toBe(1)
 
-      const entries = Array.from(grcSlack._errorBatch.values())
-      const entry = entries[0]
+      const entries = Object.values(grcSlack._errorBatch.cache)
+      const entry = entries[0].value
 
       expect(entry.errorMessage).toBe('Test error')
       expect(entry.functionName).toBe('testFunction')
@@ -154,31 +155,16 @@ describe('GrcSlack Batch Error Logging', () => {
       const payload1 = { to: 'test1@example.com', type: 'notification' }
       const payload2 = { to: 'test2@example.com', type: 'notification' }
 
-      await grcSlack.batchLogErrorToSlack('test-channel', err, 'testFunction', payload1)
-      await grcSlack.batchLogErrorToSlack('test-channel', err, 'testFunction', payload2)
+      await grcSlack.logErrorEnqueue('test-channel', err, 'testFunction', payload1)
+      await grcSlack.logErrorEnqueue('test-channel', err, 'testFunction', payload2)
 
-      expect(grcSlack._errorBatch.size).toBe(1)
+      expect(grcSlack._errorBatch.keys.length).toBe(1)
 
-      const entries = Array.from(grcSlack._errorBatch.values())
-      const entry = entries[0]
+      const entries = Object.values(grcSlack._errorBatch.cache)
+      const entry = entries[0].value
 
       expect(entry.count).toBe(2)
       expect(entry.payloads.length).toBe(3) // Initial + 2 added payloads
-    })
-
-    it('should trigger processing when maxSize is reached', async () => {
-      const processSpy = jest.spyOn(grcSlack, '_processBatchedErrors')
-
-      grcSlack._errorBatchingConfig.maxSize = 2
-
-      const err1 = new Error('Error 1')
-      const err2 = new Error('Error 2')
-      const payload = { to: 'test@example.com' }
-
-      await grcSlack.batchLogErrorToSlack('test', err1, 'func1', payload)
-      await grcSlack.batchLogErrorToSlack('test', err2, 'func2', payload)
-
-      expect(processSpy).toHaveBeenCalledTimes(1)
     })
 
     it('should fall back to direct logging on error', async () => {
@@ -190,7 +176,7 @@ describe('GrcSlack Batch Error Logging', () => {
       const err = new Error('Test error')
       const payload = { to: 'test@example.com' }
 
-      await grcSlack.batchLogErrorToSlack('test', err, 'testFunc', payload)
+      await grcSlack.logErrorEnqueue('test', err, 'testFunc', payload)
 
       expect(logErrorSpy).toHaveBeenCalledTimes(1)
 
@@ -213,9 +199,9 @@ describe('GrcSlack Batch Error Logging', () => {
       const err1 = new Error('Error 1')
       const err2 = new Error('Error 2')
 
-      await grcSlack.batchLogErrorToSlack('channel1', err1, 'func1', { to: 'test1' })
-      await grcSlack.batchLogErrorToSlack('channel2', err2, 'func1', { to: 'test2' })
-      await grcSlack.batchLogErrorToSlack('channel1', err1, 'func2', { to: 'test3' })
+      await grcSlack.logErrorEnqueue('channel1', err1, 'func1', { to: 'test1' })
+      await grcSlack.logErrorEnqueue('channel2', err2, 'func1', { to: 'test2' })
+      await grcSlack.logErrorEnqueue('channel1', err1, 'func2', { to: 'test3' })
 
       await grcSlack._processBatchedErrors()
 
@@ -226,18 +212,18 @@ describe('GrcSlack Batch Error Logging', () => {
       jest.spyOn(grcSlack, '_sendBatchedErrorMessage').mockResolvedValue(undefined)
 
       const err = new Error('Test error')
-      await grcSlack.batchLogErrorToSlack('test', err, 'func1', { to: 'test' })
+      await grcSlack.logErrorEnqueue('test', err, 'func1', { to: 'test' })
 
-      expect(grcSlack._errorBatch.size).toBe(1)
+      expect(grcSlack._errorBatch.keys.length).toBe(1)
 
       await grcSlack._processBatchedErrors()
 
-      expect(grcSlack._errorBatch.size).toBe(0)
+      expect(grcSlack._errorBatch.keys.length).toBe(0)
     })
 
     it('should handle processing errors gracefully', async () => {
       const err = new Error('Test error')
-      await grcSlack.batchLogErrorToSlack('test', err, 'func1', { to: 'test' })
+      await grcSlack.logErrorEnqueue('test', err, 'func1', { to: 'test' })
 
       jest.spyOn(grcSlack, '_sendBatchedErrorMessage').mockRejectedValue(new Error('Send error'))
 
@@ -331,9 +317,9 @@ describe('GrcSlack Batch Error Logging', () => {
       const err1 = new Error('Database connection failed')
       const err2 = new Error('API timeout')
 
-      await grcSlack.batchLogErrorToSlack('alerts', err1, 'dbConnect', { user: 'user1' })
-      await grcSlack.batchLogErrorToSlack('alerts', err1, 'dbConnect', { user: 'user2' })
-      await grcSlack.batchLogErrorToSlack('alerts', err2, 'apiCall', { endpoint: '/users' })
+      await grcSlack.logErrorEnqueue('alerts', err1, 'dbConnect', { user: 'user1' })
+      await grcSlack.logErrorEnqueue('alerts', err1, 'dbConnect', { user: 'user2' })
+      await grcSlack.logErrorEnqueue('alerts', err2, 'apiCall', { endpoint: '/users' })
 
       await grcSlack._processBatchedErrors()
 
@@ -349,8 +335,8 @@ describe('GrcSlack Batch Error Logging', () => {
 
       const err = new Error('Test error')
 
-      await grcSlack.batchLogErrorToSlack('channel1', err, 'func1', { data: 'test1' })
-      await grcSlack.batchLogErrorToSlack('channel2', err, 'func1', { data: 'test2' })
+      await grcSlack.logErrorEnqueue('channel1', err, 'func1', { data: 'test1' })
+      await grcSlack.logErrorEnqueue('channel2', err, 'func1', { data: 'test2' })
 
       await grcSlack._processBatchedErrors()
 
@@ -365,14 +351,14 @@ describe('GrcSlack Batch Error Logging', () => {
       const err = new Error('Test error')
       const payload = { data: 'test' }
 
-      await grcSlack.batchLogErrorToSlack(null, err, 'func1', payload)
-      await grcSlack.batchLogErrorToSlack(undefined, err, 'func2', payload)
-      await grcSlack.batchLogErrorToSlack('', err, 'func3', payload)
+      await grcSlack.logErrorEnqueue(null, err, 'func1', payload)
+      await grcSlack.logErrorEnqueue(undefined, err, 'func2', payload)
+      await grcSlack.logErrorEnqueue('', err, 'func3', payload)
 
-      expect(grcSlack._errorBatch.size).toBe(3)
+      expect(grcSlack._errorBatch.keys.length).toBe(3)
 
-      const entries = Array.from(grcSlack._errorBatch.values())
-      entries.forEach(entry => {
+      const entries = Object.values(grcSlack._errorBatch.cache)
+      entries.forEach(({ value: entry }) => {
         expect(entry.reqChannel).toBe('default-channel')
       })
     })
@@ -382,15 +368,15 @@ describe('GrcSlack Batch Error Logging', () => {
       const payload = { data: 'test' }
 
       // Test with valid string channel
-      await expect(grcSlack.batchLogErrorToSlack('valid-channel', err, 'func1', payload))
+      await expect(grcSlack.logErrorEnqueue('valid-channel', err, 'func1', payload))
         .resolves.not.toThrow()
 
       // Test with another valid channel format
-      await expect(grcSlack.batchLogErrorToSlack('general', err, 'func2', payload))
+      await expect(grcSlack.logErrorEnqueue('general', err, 'func2', payload))
         .resolves.not.toThrow()
 
       // Verify entries were created
-      expect(grcSlack._errorBatch.size).toBe(2)
+      expect(grcSlack._errorBatch.keys.length).toBe(2)
     })
   })
 
@@ -408,7 +394,7 @@ describe('GrcSlack Batch Error Logging', () => {
 
       // Add batched errors
       const err = new Error('Test error')
-      await grcSlack.batchLogErrorToSlack('test', err, 'func1', { to: 'test' })
+      await grcSlack.logErrorEnqueue('test', err, 'func1', { to: 'test' })
 
       // Call _stop
       await new Promise((resolve) => {

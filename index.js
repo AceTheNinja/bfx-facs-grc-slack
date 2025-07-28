@@ -1,6 +1,7 @@
 'use strict'
 
 const util = require('util')
+const LRU = require('lru')
 const Base = require('bfx-facs-base')
 
 class GrcSlack extends Base {
@@ -9,7 +10,6 @@ class GrcSlack extends Base {
 
     this.name = 'grc-slack'
     this._hasConf = true
-    this._errorBatch = new Map()
     this.init()
 
     if (opts.conf) this.conf = opts.conf
@@ -19,6 +19,10 @@ class GrcSlack extends Base {
       maxSize: this.conf.errorBatching.maxSize || 50,
       maxMessageLength: this.conf.errorBatching.maxMessageLength || 4000
     }
+
+    this._errorBatch = new LRU({
+      max: this._errorBatchingConfig.maxSize
+    })
 
     this._initErrorBatching()
   }
@@ -31,17 +35,19 @@ class GrcSlack extends Base {
     this._errorBatchTimer.unref()
   }
 
-  _stop (cb) {
+  async _stop (cb) {
     if (this._errorBatchTimer) {
       clearInterval(this._errorBatchTimer)
       this._errorBatchTimer = null
     }
 
-    this._processBatchedErrors().catch(err => {
+    try {
+      await this._processBatchedErrors()
+    } catch (err) {
       console.error('Failed to process final batch of errors during shutdown', err)
-    }).finally(() => {
+    } finally {
       super._stop(cb)
-    })
+    }
   }
 
   message (reqChannel, message) {
@@ -74,13 +80,13 @@ class GrcSlack extends Base {
 
   /**
    * Batch log error to slack
-   * @param {string} [reqChannel] - Slack channel to log the error to, if not provided, the channel from the config will be used
+   * @param {string} reqChannel - Slack channel to log the error to, if not provided, the channel from the config will be used
    * @param {Error} err - Error to log
    * @param {string} functionName - Name of the function where the error occurred
    * @param {Object} payload - Payload to log
    * @param {...any} extra - Additional information to log
    */
-  async batchLogErrorToSlack (reqChannel, err, functionName, payload, ...extra) {
+  async logErrorEnqueue (reqChannel, err, functionName, payload, ...extra) {
     if (!reqChannel) {
       reqChannel = this.conf.channel
     }
@@ -109,10 +115,6 @@ class GrcSlack extends Base {
       errorEntry.count++
       errorEntry.lastSeen = now
       errorEntry.payloads.push(payload)
-
-      if (this._errorBatch.size >= this._errorBatchingConfig.maxSize) {
-        this._processBatchedErrors()
-      }
     } catch (e) {
       console.error('Error batching failed, falling back to direct log', e)
       await this.logError(reqChannel, err, functionName, payload, ...extra)
@@ -125,18 +127,22 @@ class GrcSlack extends Base {
   }
 
   async _processBatchedErrors () {
-    if (this._errorBatch.size === 0) {
+    if (this._errorBatch.keys.length === 0) {
       return
     }
 
     try {
       const errorsByFunctionNameAndChannel = new Map()
 
-      for (const [errorKey, errorEntry] of this._errorBatch) {
+      const allEntries = Object.values(this._errorBatch?.cache || {})
+
+      for (const { value: errorEntry } of allEntries) {
         const groupKey = `${errorEntry.reqChannel}:${errorEntry.functionName}`
         if (!errorsByFunctionNameAndChannel.has(groupKey)) {
           errorsByFunctionNameAndChannel.set(groupKey, [])
         }
+
+        const errorKey = this._createErrorKey(errorEntry.reqChannel, { message: errorEntry.errorMessage }, errorEntry.functionName)
         errorsByFunctionNameAndChannel.get(groupKey).push({ errorKey, ...errorEntry })
       }
 
