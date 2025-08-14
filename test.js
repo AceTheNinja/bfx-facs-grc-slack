@@ -161,9 +161,7 @@ describe('GrcSlack Batch Error Logging', () => {
       const entries = Object.values(grcSlack._errorBatch.cache)
       const entry = entries[0].value
 
-      // Two payload entries: one from init, one appended
       expect(entry.payloads.length).toBe(2)
-      // Both payload entries should contain the extras array
       expect(Array.isArray(entry.payloads[0].extras)).toBe(true)
       expect(Array.isArray(entry.payloads[1].extras)).toBe(true)
       expect(entry.payloads[0].extras.length).toBe(2)
