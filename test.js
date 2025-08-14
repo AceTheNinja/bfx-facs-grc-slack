@@ -144,7 +144,7 @@ describe('GrcSlack Batch Error Logging', () => {
       const entry = entries[0].value
 
       expect(entry.errorMessage).toBe('Test error')
-      expect(entry.functionName).toBe('testFunction')
+      expect(entry.sourceName).toBe('testFunction')
       expect(entry.reqChannel).toBe('test-channel')
       expect(entry.count).toBe(1)
       expect(entry.payloads.length).toBe(2) // Initial + added payload

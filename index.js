@@ -15,9 +15,9 @@ class GrcSlack extends Base {
     if (opts.conf) this.conf = opts.conf
 
     this._errorBatchingConfig = {
-      interval: this.conf.errorBatching.interval || 60000,
-      maxSize: this.conf.errorBatching.maxSize || 50,
-      maxMessageLength: this.conf.errorBatching.maxMessageLength || 4000
+      interval: this.conf.errorBatching?.interval || 60000,
+      maxSize: this.conf.errorBatching?.maxSize || 50,
+      maxMessageLength: this.conf.errorBatching?.maxMessageLength || 4000
     }
 
     this._errorBatch = new LRU({
@@ -82,17 +82,17 @@ class GrcSlack extends Base {
    * Batch log error to slack
    * @param {string} reqChannel - Slack channel to log the error to, if not provided, the channel from the config will be used
    * @param {Error} err - Error to log
-   * @param {string} functionName - Name of the function where the error occurred
+   * @param {string} sourceName - Source of the error
    * @param {Object} payload - Payload to log
    * @param {...any} extra - Additional information to log
    */
-  async logErrorEnqueue (reqChannel, err, functionName, payload, ...extra) {
+  async logErrorEnqueue (reqChannel, err, sourceName, payload, ...extra) {
     if (!reqChannel) {
       reqChannel = this.conf.channel
     }
 
     try {
-      const errorKey = this._createErrorKey(reqChannel, err, functionName)
+      const errorKey = this._createErrorKey(reqChannel, err, sourceName)
 
       const now = new Date()
       let errorEntry = this._errorBatch.get(errorKey)
@@ -100,7 +100,7 @@ class GrcSlack extends Base {
       if (!errorEntry) {
         errorEntry = {
           errorMessage: err.message,
-          functionName,
+          sourceName,
           reqChannel,
           payloads: [
             payload
@@ -117,13 +117,13 @@ class GrcSlack extends Base {
       errorEntry.payloads.push(payload)
     } catch (e) {
       console.error('Error batching failed, falling back to direct log', e)
-      await this.logError(reqChannel, err, functionName, payload, ...extra)
+      await this.logError(reqChannel, err, sourceName, payload, ...extra)
     }
   }
 
-  _createErrorKey (reqChannel, err, functionName) {
+  _createErrorKey (reqChannel, err, sourceName) {
     const errorMsg = err?.message || 'Unknown error'
-    return `${reqChannel}:${functionName}:${errorMsg}`
+    return `${reqChannel}:${sourceName}:${errorMsg}`
   }
 
   async _processBatchedErrors () {
@@ -137,18 +137,18 @@ class GrcSlack extends Base {
       const allEntries = Object.values(this._errorBatch?.cache || {})
 
       for (const { value: errorEntry } of allEntries) {
-        const groupKey = `${errorEntry.reqChannel}:${errorEntry.functionName}`
+        const groupKey = `${errorEntry.reqChannel}:${errorEntry.sourceName}`
         if (!errorsByFunctionNameAndChannel.has(groupKey)) {
           errorsByFunctionNameAndChannel.set(groupKey, [])
         }
 
-        const errorKey = this._createErrorKey(errorEntry.reqChannel, { message: errorEntry.errorMessage }, errorEntry.functionName)
+        const errorKey = this._createErrorKey(errorEntry.reqChannel, { message: errorEntry.errorMessage }, errorEntry.sourceName)
         errorsByFunctionNameAndChannel.get(groupKey).push({ errorKey, ...errorEntry })
       }
 
       for (const [groupKey, errors] of errorsByFunctionNameAndChannel) {
-        const [reqChannel, functionName] = groupKey.split(':')
-        await this._sendBatchedErrorMessage(reqChannel, functionName, errors)
+        const [reqChannel, sourceName] = groupKey.split(':')
+        await this._sendBatchedErrorMessage(reqChannel, sourceName, errors)
       }
 
       this._errorBatch.clear()
@@ -157,11 +157,11 @@ class GrcSlack extends Base {
     }
   }
 
-  async _sendBatchedErrorMessage (reqChannel, functionName, errors) {
+  async _sendBatchedErrorMessage (reqChannel, sourceName, errors) {
     const totalErrors = errors.reduce((sum, error) => sum + error.count, 0)
     const timeRange = this._getTimeRange(errors)
 
-    let message = `*Batched Error Report - ${functionName}*\n`
+    let message = `*Batched Error Report - ${sourceName}*\n`
     message += `*Summary:* ${totalErrors} errors across ${errors.length} types (${timeRange})\n\n`
 
     let truncated = false
