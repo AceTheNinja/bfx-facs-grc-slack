@@ -57,7 +57,7 @@ class GrcSlack extends Base {
     const maxLength = slack.max_length || 1024
     const env = (slack.env) ? `Env: ${slack.env}, ` : ''
     const rawText = env + message
-    const text = (maxLength) ? rawText.substr(0, maxLength) : rawText
+    const text = (maxLength) ? rawText.slice(0, maxLength) : rawText
     const channel = reqChannel || slack.channel
     const send = [{ channel, text }]
 
@@ -103,7 +103,7 @@ class GrcSlack extends Base {
           sourceName,
           reqChannel,
           payloads: [
-            payload
+            { payload, extras: extra }
           ],
           count: 0,
           firstSeen: now,
@@ -114,7 +114,7 @@ class GrcSlack extends Base {
 
       errorEntry.count++
       errorEntry.lastSeen = now
-      errorEntry.payloads.push(payload)
+      errorEntry.payloads.push({ payload, extras: extra })
     } catch (e) {
       console.error('Error batching failed, falling back to direct log', e)
       await this.logError(reqChannel, err, sourceName, payload, ...extra)
@@ -171,8 +171,11 @@ class GrcSlack extends Base {
       message += `• *${error.errorMessage}* (${error.count}x)\n`
       message += '  Payloads:\n'
 
-      for (const payload of error.payloads.slice(0, 3)) {
-        const payloadStr = `    - ${JSON.stringify(payload)}\n`
+      for (const item of error.payloads.slice(0, 3)) {
+        let payloadStr = `    - ${JSON.stringify(item.payload)}\n`
+        if (Array.isArray(item.extras) && item.extras.length) {
+          payloadStr += `     Extras: ${JSON.stringify(item.extras)}\n`
+        }
 
         if (message.length + payloadStr.length > (this._errorBatchingConfig.maxMessageLength)) {
           message += `\n... message truncated (${errors.length - errors.indexOf(error)} more error types)`

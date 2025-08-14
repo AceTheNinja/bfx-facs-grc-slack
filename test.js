@@ -4,8 +4,8 @@
 
 jest.mock('bfx-facs-base', () => {
   return class MockBase {
-    init () { }
-    _stop (cb) {
+    init() { }
+    _stop(cb) {
       if (cb) cb()
     }
   }
@@ -150,6 +150,26 @@ describe('GrcSlack Batch Error Logging', () => {
       expect(entry.payloads.length).toBe(2) // Initial + added payload
     })
 
+    it('should capture extras alongside payloads', async () => {
+      const err = new Error('Test error with extras')
+      const payload = { id: 123 }
+      const extra1 = 'context-info'
+      const extra2 = { meta: true }
+
+      await grcSlack.logErrorEnqueue('chan', err, 'src', payload, extra1, extra2)
+
+      const entries = Object.values(grcSlack._errorBatch.cache)
+      const entry = entries[0].value
+
+      // Two payload entries: one from init, one appended
+      expect(entry.payloads.length).toBe(2)
+      // Both payload entries should contain the extras array
+      expect(Array.isArray(entry.payloads[0].extras)).toBe(true)
+      expect(Array.isArray(entry.payloads[1].extras)).toBe(true)
+      expect(entry.payloads[0].extras.length).toBe(2)
+      expect(entry.payloads[1].extras.length).toBe(2)
+    })
+
     it('should increment count for duplicate errors', async () => {
       const err = new Error('Test error')
       const payload1 = { to: 'test1@example.com', type: 'notification' }
@@ -246,8 +266,8 @@ describe('GrcSlack Batch Error Logging', () => {
           errorMessage: 'Test error 1',
           count: 3,
           payloads: [
-            { to: 'test1@example.com', type: 'notification' },
-            { to: 'test2@example.com', type: 'alert' }
+            { payload: { to: 'test1@example.com', type: 'notification' }, extras: ['ex1'] },
+            { payload: { to: 'test2@example.com', type: 'alert' }, extras: ['ex2'] }
           ],
           firstSeen: new Date('2023-01-01T10:00:00Z'),
           lastSeen: new Date('2023-01-01T10:05:00Z')
@@ -265,6 +285,28 @@ describe('GrcSlack Batch Error Logging', () => {
       expect(message).toContain('Test error 1')
     })
 
+    it('should include extras in message when present', async () => {
+      const logErrorSpy = jest.spyOn(grcSlack, 'logError').mockResolvedValue(undefined)
+
+      const errors = [
+        {
+          errorMessage: 'Err with extras',
+          count: 1,
+          payloads: [
+            { payload: { foo: 'bar' }, extras: ['extra-info', { trace: true }] }
+          ],
+          firstSeen: new Date(),
+          lastSeen: new Date()
+        }
+      ]
+
+      await grcSlack._sendBatchedErrorMessage('ch', 'src', errors)
+
+      const [, message] = logErrorSpy.mock.calls[0]
+      expect(String(message)).toContain('Extras:')
+      expect(String(message)).toContain('extra-info')
+    })
+
     it('should truncate long messages', async () => {
       const logErrorSpy = jest.spyOn(grcSlack, 'logError').mockResolvedValue(undefined)
 
@@ -276,9 +318,12 @@ describe('GrcSlack Batch Error Logging', () => {
           count: 1,
           payloads: [
             {
-              to: 'test@example.com',
-              type: 'notification',
-              data: 'Very long data that will make the message exceed the limit'.repeat(10)
+              payload: {
+                to: 'test@example.com',
+                type: 'notification',
+                data: 'Very long data that will make the message exceed the limit'.repeat(10)
+              },
+              extras: ['extra1', 'extra2']
             }
           ],
           firstSeen: new Date(),
