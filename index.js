@@ -4,6 +4,8 @@ const util = require('util')
 const LRU = require('lru')
 const Base = require('bfx-facs-base')
 
+const { formatTime } = require('./utils/date-time')
+
 class GrcSlack extends Base {
   constructor (caller, opts, ctx) {
     super(caller, opts, ctx)
@@ -14,23 +16,19 @@ class GrcSlack extends Base {
 
     if (opts.conf) this.conf = opts.conf
 
-    this._errorBatchingConfig = {
-      interval: this.conf.errorBatching?.interval || 60000,
-      maxSize: this.conf.errorBatching?.maxSize || 50,
-      maxMessageLength: this.conf.errorBatching?.maxMessageLength || 4000
+    if (this.conf.errorBatching) {
+      this._errorBatch = new LRU({
+        max: this.conf.errorBatching?.maxSize || 50
+      })
+
+      this._initErrorBatching()
     }
-
-    this._errorBatch = new LRU({
-      max: this._errorBatchingConfig.maxSize
-    })
-
-    this._initErrorBatching()
   }
 
   _initErrorBatching () {
     this._errorBatchTimer = setInterval(() => {
       this._processBatchedErrors()
-    }, this._errorBatchingConfig.interval)
+    }, this.conf.errorBatching?.interval || 60000)
 
     this._errorBatchTimer.unref()
   }
@@ -87,6 +85,11 @@ class GrcSlack extends Base {
    * @param {...any} extra - Additional information to log
    */
   async logErrorEnqueue (reqChannel, err, sourceName, payload, ...extra) {
+    if (!this._errorBatch) {
+      console.error('Error batching not initialized, falling back to direct log')
+      return this.logError(reqChannel, err, sourceName, payload, ...extra)
+    }
+
     if (!reqChannel) {
       reqChannel = this.conf.channel
     }
@@ -127,7 +130,7 @@ class GrcSlack extends Base {
   }
 
   async _processBatchedErrors () {
-    if (this._errorBatch.keys.length === 0) {
+    if (!this._errorBatch || this._errorBatch.keys.length === 0) {
       return
     }
 
@@ -150,10 +153,10 @@ class GrcSlack extends Base {
         const [reqChannel, sourceName] = groupKey.split(':')
         await this._sendBatchedErrorMessage(reqChannel, sourceName, errors)
       }
-
-      this._errorBatch.clear()
     } catch (e) {
       console.error('Failed to process batched errors', e)
+    } finally {
+      this._errorBatch.clear()
     }
   }
 
@@ -177,7 +180,7 @@ class GrcSlack extends Base {
           payloadStr += `     Extras: ${JSON.stringify(item.extras)}\n`
         }
 
-        if (message.length + payloadStr.length > (this._errorBatchingConfig.maxMessageLength)) {
+        if (message.length + payloadStr.length > (this.conf.errorBatching?.maxMessageLength || 4000)) {
           message += `\n... message truncated (${errors.length - errors.indexOf(error)} more error types)`
           truncated = true
           break
@@ -202,8 +205,6 @@ class GrcSlack extends Base {
     const allTimes = errors.flatMap(error => [error.firstSeen, error.lastSeen])
     const earliest = new Date(Math.min(...allTimes))
     const latest = new Date(Math.max(...allTimes))
-
-    const formatTime = (date) => date.toISOString().substring(11, 19)
 
     if (earliest.getTime() === latest.getTime()) {
       return formatTime(earliest)

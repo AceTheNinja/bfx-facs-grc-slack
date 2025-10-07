@@ -11,7 +11,7 @@ jest.mock('bfx-facs-base', () => {
   }
 })
 
-const GrcSlack = require('./index.js')
+const GrcSlack = require('../index.js')
 
 describe('GrcSlack Batch Error Logging', () => {
   let grcSlack
@@ -239,7 +239,7 @@ describe('GrcSlack Batch Error Logging', () => {
       expect(grcSlack._errorBatch.keys.length).toBe(0)
     })
 
-    it('should handle processing errors gracefully', async () => {
+    it('should handle processing errors gracefully and clear batch', async () => {
       const err = new Error('Test error')
       await grcSlack.logErrorEnqueue('test', err, 'func1', { to: 'test' })
 
@@ -250,6 +250,7 @@ describe('GrcSlack Batch Error Logging', () => {
       await grcSlack._processBatchedErrors()
 
       expect(consoleSpy).toHaveBeenCalledWith('Failed to process batched errors', expect.any(Error))
+      expect(grcSlack._errorBatch.keys.length).toBe(0)
 
       consoleSpy.mockRestore()
     })
@@ -308,7 +309,7 @@ describe('GrcSlack Batch Error Logging', () => {
     it('should truncate long messages', async () => {
       const logErrorSpy = jest.spyOn(grcSlack, 'logError').mockResolvedValue(undefined)
 
-      grcSlack._errorBatchingConfig.maxMessageLength = 200
+      grcSlack.conf.errorBatching.maxMessageLength = 200
 
       const errors = [
         {
@@ -341,7 +342,7 @@ describe('GrcSlack Batch Error Logging', () => {
       const errors = Array.from({ length: 15 }, (_, i) => ({
         errorMessage: `Error ${i}`,
         count: 1,
-        payloads: [{ to: `test${i}@example.com` }],
+        payloads: [{ payload: { to: `test${i}@example.com` }, extras: [] }],
         firstSeen: new Date(),
         lastSeen: new Date()
       }))
@@ -432,6 +433,13 @@ describe('GrcSlack Batch Error Logging', () => {
       }
     })
 
+    it('should not initialize batching when errorBatching is absent', () => {
+      const confNoBatch = { ...mockConf, errorBatching: undefined }
+      const instance = new GrcSlack(mockCaller, { conf: confNoBatch }, {})
+      expect(instance._errorBatch).toBeUndefined()
+      expect(instance._errorBatchTimer).toBeUndefined()
+    })
+
     it('should process final batch during shutdown', async () => {
       const processSpy = jest.spyOn(grcSlack, '_processBatchedErrors').mockResolvedValue(undefined)
 
@@ -446,5 +454,18 @@ describe('GrcSlack Batch Error Logging', () => {
 
       expect(processSpy).toHaveBeenCalled()
     }, 10000)
+  })
+
+  describe('Disabled batching behavior', () => {
+    it('logErrorEnqueue should fallback to direct log when not initialized', async () => {
+      const confNoBatch = { ...mockConf, errorBatching: undefined }
+      const instance = new GrcSlack(mockCaller, { conf: confNoBatch }, {})
+      const spy = jest.spyOn(instance, 'logError').mockResolvedValue(undefined)
+
+      const err = new Error('no batch')
+      await instance.logErrorEnqueue('ch', err, 'src', { a: 1 }, 'e1')
+
+      expect(spy).toHaveBeenCalledTimes(1)
+    })
   })
 })
