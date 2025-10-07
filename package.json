@@ -17,7 +17,6 @@
     "lru": "3.1.0"
   },
   "devDependencies": {
-    "@types/jest": "30.0.0",
     "jest": "30.0.5",
     "standard": "14.3.1"
   },
