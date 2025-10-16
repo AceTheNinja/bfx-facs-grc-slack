@@ -1,7 +1,6 @@
 'use strict'
 
 const util = require('util')
-const LRU = require('lru')
 const Base = require('bfx-facs-base')
 
 const { formatTime } = require('./utils/date-time')
@@ -16,11 +15,8 @@ class GrcSlack extends Base {
 
     if (opts.conf) this.conf = opts.conf
 
-    if (this.conf.errorBatching) {
-      this._errorBatch = new LRU({
-        max: this.conf.errorBatching?.maxSize || 50
-      })
-
+    if (this.conf.errorBatching && opts.lru) {
+      this._errorBatch = opts.lru
       this._initErrorBatching()
     }
   }
@@ -130,14 +126,14 @@ class GrcSlack extends Base {
   }
 
   async _processBatchedErrors () {
-    if (!this._errorBatch || this._errorBatch.keys.length === 0) {
+    if (!this._errorBatch || this._errorBatch.cache.length === 0) {
       return
     }
 
     try {
       const errorsByFunctionNameAndChannel = new Map()
 
-      const allEntries = Object.values(this._errorBatch?.cache || {})
+      const allEntries = Object.values(this._errorBatch.cache.cache || {})
 
       for (const { value: errorEntry } of allEntries) {
         const groupKey = `${errorEntry.reqChannel}:${errorEntry.sourceName}`

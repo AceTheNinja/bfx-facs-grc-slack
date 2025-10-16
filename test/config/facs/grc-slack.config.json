@@ -1,0 +1,9 @@
+{
+  "s0": {
+    "enable": true,
+    "worker": "rest:ext:slack",
+    "max_length": 16384,
+    "channel": "C0600000000",
+    "env": "test"
+  }
+}
