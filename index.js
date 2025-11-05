@@ -51,7 +51,7 @@ class GrcSlack extends Base {
     const maxLength = slack.max_length || 1024
     const env = (slack.env) ? `Env: ${slack.env}, ` : ''
     const rawText = env + message
-    const text = (maxLength) ? rawText.slice(0, maxLength) : rawText
+    const text = (rawText.length > maxLength) ? rawText.slice(0, maxLength) : rawText
     const channel = reqChannel || slack.channel
     const send = [{ channel, text }]
 
