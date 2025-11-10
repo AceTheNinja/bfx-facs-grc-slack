@@ -15,9 +15,6 @@
   "dependencies": {
     "bfx-facs-base": "git+https://github.com/bitfinexcom/bfx-facs-base.git"
   },
-  "optionalDependencies": {
-    "bfx-facs-lru": "git+https://github.com/bitfinexcom/bfx-facs-lru.git"
-  },
   "devDependencies": {
     "jest": "30.0.5",
     "standard": "14.3.1"
