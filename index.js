@@ -4,6 +4,7 @@ const util = require('util')
 const Base = require('bfx-facs-base')
 
 const { formatTime } = require('./utils/date-time')
+const { createHash } = require('crypto')
 
 class GrcSlack extends Base {
   constructor (caller, opts, ctx) {
@@ -72,6 +73,16 @@ class GrcSlack extends Base {
     return this.message(reqChannel, `${extraP}${errTag}${error}`)
   }
 
+  _createErrorGroupKey (reqChannel, sourceName) {
+    return `${reqChannel}:${sourceName}`
+  }
+
+  _createErrorKey (reqChannel, err, sourceName = 'unknown') {
+    const errorMsg = err?.message || err?.toString() || 'Unknown error'
+    const hash = createHash('sha1').update(errorMsg).digest('hex')
+    return this._createErrorGroupKey(reqChannel, sourceName) + `:${hash}`
+  }
+
   /**
    * Batch log error to slack
    * @param {string} reqChannel - Slack channel to log the error to, if not provided, the channel from the config will be used
@@ -126,38 +137,41 @@ class GrcSlack extends Base {
     }
   }
 
-  _createErrorGroupKey (reqChannel, sourceName) {
-    return `${reqChannel}:${sourceName}`
-  }
-
-  _createErrorKey (reqChannel, err, sourceName = 'unknown') {
-    const errorMsg = err?.message || 'Unknown error'
-    return this._createErrorGroupKey(reqChannel, sourceName) + `:${errorMsg}`
-  }
-
   async _processBatchedErrors () {
     if (!this._errorBatch || this._errorBatch.cache.length === 0) {
       return
     }
 
     try {
-      const errorsByFunctionNameAndChannel = new Map()
+      const errorGroups = new Map() // group errors by function name and channel
 
       const allEntries = Object.values(this._errorBatch.cache.cache || {})
 
       for (const { value: errorEntry } of allEntries) {
         const groupKey = this._createErrorGroupKey(errorEntry.reqChannel, errorEntry.sourceName)
-        if (!errorsByFunctionNameAndChannel.has(groupKey)) {
-          errorsByFunctionNameAndChannel.set(groupKey, [])
+        if (!errorGroups.has(groupKey)) {
+          errorGroups.set(groupKey, {
+            errors: [],
+            totalCount: 0,
+            earliestTime: Infinity,
+            latestTime: -Infinity
+          })
         }
 
-        const errorKey = this._createErrorKey(errorEntry.reqChannel, { message: errorEntry.errorMessage }, errorEntry.sourceName)
-        errorsByFunctionNameAndChannel.get(groupKey).push({ errorKey, ...errorEntry })
+        const group = errorGroups.get(groupKey)
+        group.errors.push(errorEntry)
+        group.totalCount += errorEntry.count
+
+        // Track time range
+        const firstTime = errorEntry.firstSeen.getTime()
+        const lastTime = errorEntry.lastSeen.getTime()
+        if (firstTime < group.earliestTime) group.earliestTime = firstTime
+        if (lastTime > group.latestTime) group.latestTime = lastTime
       }
 
-      for (const errors of errorsByFunctionNameAndChannel.values()) {
+      for (const { errors, totalCount, earliestTime, latestTime } of errorGroups.values()) {
         const { reqChannel, sourceName } = errors[0]
-        await this._sendBatchedErrorMessage(reqChannel, sourceName, errors)
+        await this._sendBatchedErrorMessage(reqChannel, sourceName, errors, totalCount, earliestTime, latestTime)
       }
     } catch (e) {
       console.error('Failed to process batched errors', e)
@@ -166,9 +180,8 @@ class GrcSlack extends Base {
     }
   }
 
-  async _sendBatchedErrorMessage (reqChannel, sourceName, errors) {
-    const totalErrors = errors.reduce((sum, error) => sum + error.count, 0)
-    const timeRange = this._getTimeRange(errors)
+  async _sendBatchedErrorMessage (reqChannel, sourceName, errors, totalErrors, earliestTime, latestTime) {
+    const timeRange = this._formatTimeRange(earliestTime, latestTime)
 
     let message = `*Batched Error Report - ${sourceName}*\n`
     message += `*Summary:* ${totalErrors} errors across ${errors.length} types (${timeRange})\n\n`
@@ -203,12 +216,11 @@ class GrcSlack extends Base {
     await this.logError(reqChannel, message)
   }
 
-  _getTimeRange (errors) {
-    const allTimes = errors.flatMap(error => [error.firstSeen, error.lastSeen])
-    const earliest = new Date(Math.min(...allTimes))
-    const latest = new Date(Math.max(...allTimes))
+  _formatTimeRange (earliestTime, latestTime) {
+    const earliest = new Date(earliestTime)
+    const latest = new Date(latestTime)
 
-    if (earliest.getTime() === latest.getTime()) {
+    if (earliestTime === latestTime) {
       return formatTime(earliest)
     }
 

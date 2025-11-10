@@ -84,15 +84,12 @@ describe('GrcSlack Batch Error Logging', () => {
     })
   })
 
-  describe('_getTimeRange', () => {
+  describe('_formatTimeRange', () => {
     it('should format single timestamp correctly', () => {
       const now = new Date()
-      const errors = [{
-        firstSeen: now,
-        lastSeen: now
-      }]
+      const timestamp = now.getTime()
 
-      const timeRange = grcSlack._getTimeRange(errors)
+      const timeRange = grcSlack._formatTimeRange(timestamp, timestamp)
       const expected = now.toISOString().substring(11, 19)
 
       expect(timeRange).toBe(expected)
@@ -102,28 +99,16 @@ describe('GrcSlack Batch Error Logging', () => {
       const start = new Date('2023-01-01T10:00:00Z')
       const end = new Date('2023-01-01T10:05:30Z')
 
-      const errors = [{
-        firstSeen: start,
-        lastSeen: end
-      }]
-
-      const timeRange = grcSlack._getTimeRange(errors)
+      const timeRange = grcSlack._formatTimeRange(start.getTime(), end.getTime())
 
       expect(timeRange).toBe('10:00:00 - 10:05:30')
     })
 
-    it('should handle multiple error entries', () => {
-      const start1 = new Date('2023-01-01T10:00:00Z')
-      const end1 = new Date('2023-01-01T10:02:00Z')
-      const start2 = new Date('2023-01-01T10:01:00Z')
-      const end2 = new Date('2023-01-01T10:05:00Z')
+    it('should handle multiple timestamps', () => {
+      const start = new Date('2023-01-01T10:00:00Z')
+      const end = new Date('2023-01-01T10:05:00Z')
 
-      const errors = [
-        { firstSeen: start1, lastSeen: end1 },
-        { firstSeen: start2, lastSeen: end2 }
-      ]
-
-      const timeRange = grcSlack._getTimeRange(errors)
+      const timeRange = grcSlack._formatTimeRange(start.getTime(), end.getTime())
 
       expect(timeRange).toBe('10:00:00 - 10:05:00')
     })
@@ -265,6 +250,9 @@ describe('GrcSlack Batch Error Logging', () => {
     it('should format batch message correctly', async () => {
       const logErrorSpy = jest.spyOn(grcSlack, 'logError').mockResolvedValue(undefined)
 
+      const firstSeen = new Date('2023-01-01T10:00:00Z')
+      const lastSeen = new Date('2023-01-01T10:05:00Z')
+      
       const errors = [
         {
           errorMessage: 'Test error 1',
@@ -273,12 +261,12 @@ describe('GrcSlack Batch Error Logging', () => {
             { payload: { to: 'test1@example.com', type: 'notification' }, extras: ['ex1'] },
             { payload: { to: 'test2@example.com', type: 'alert' }, extras: ['ex2'] }
           ],
-          firstSeen: new Date('2023-01-01T10:00:00Z'),
-          lastSeen: new Date('2023-01-01T10:05:00Z')
+          firstSeen,
+          lastSeen
         }
       ]
 
-      await grcSlack._sendBatchedErrorMessage('test-channel', 'testFunction', errors)
+      await grcSlack._sendBatchedErrorMessage('test-channel', 'testFunction', errors, 3, firstSeen.getTime(), lastSeen.getTime())
 
       expect(logErrorSpy).toHaveBeenCalledTimes(1)
 
@@ -294,6 +282,7 @@ describe('GrcSlack Batch Error Logging', () => {
     it('should include extras in message when present', async () => {
       const logErrorSpy = jest.spyOn(grcSlack, 'logError').mockResolvedValue(undefined)
 
+      const now = new Date()
       const errors = [
         {
           errorMessage: 'Err with extras',
@@ -301,12 +290,12 @@ describe('GrcSlack Batch Error Logging', () => {
           payloads: [
             { payload: { foo: 'bar' }, extras: ['extra-info', { trace: true }] }
           ],
-          firstSeen: new Date(),
-          lastSeen: new Date()
+          firstSeen: now,
+          lastSeen: now
         }
       ]
 
-      await grcSlack._sendBatchedErrorMessage('ch', 'src', errors)
+      await grcSlack._sendBatchedErrorMessage('ch', 'src', errors, 1, now.getTime(), now.getTime())
 
       const [, message] = logErrorSpy.mock.calls[0]
       expect(String(message)).toContain('Extras:')
@@ -320,6 +309,7 @@ describe('GrcSlack Batch Error Logging', () => {
 
       grcSlack.conf.errorBatching.maxMessageLength = 200
 
+      const now = new Date()
       const errors = [
         {
           errorMessage: 'Test error with very long details that should cause truncation',
@@ -334,12 +324,12 @@ describe('GrcSlack Batch Error Logging', () => {
               extras: ['extra1', 'extra2']
             }
           ],
-          firstSeen: new Date(),
-          lastSeen: new Date()
+          firstSeen: now,
+          lastSeen: now
         }
       ]
 
-      await grcSlack._sendBatchedErrorMessage('test', 'testFunc', errors)
+      await grcSlack._sendBatchedErrorMessage('test', 'testFunc', errors, 1, now.getTime(), now.getTime())
 
       const [, message] = logErrorSpy.mock.calls[0]
       expect(message).toContain('truncated')
@@ -351,15 +341,16 @@ describe('GrcSlack Batch Error Logging', () => {
     it('should limit number of error types displayed', async () => {
       const logErrorSpy = jest.spyOn(grcSlack, 'logError').mockResolvedValue(undefined)
 
+      const now = new Date()
       const errors = Array.from({ length: 15 }, (_, i) => ({
         errorMessage: `Error ${i}`,
         count: 1,
         payloads: [{ payload: { to: `test${i}@example.com` }, extras: [] }],
-        firstSeen: new Date(),
-        lastSeen: new Date()
+        firstSeen: now,
+        lastSeen: now
       }))
 
-      await grcSlack._sendBatchedErrorMessage('test', 'testFunc', errors)
+      await grcSlack._sendBatchedErrorMessage('test', 'testFunc', errors, 15, now.getTime(), now.getTime())
 
       const [, message] = logErrorSpy.mock.calls[0]
       expect(message).toContain('and 5 more error types')
