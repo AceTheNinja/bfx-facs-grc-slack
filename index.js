@@ -18,14 +18,24 @@ class GrcSlack extends Base {
 
     if (this.conf.errorBatching && opts.lru) {
       this._errorBatch = opts.lru
+      this._validateBatchingConfig()
       this._initErrorBatching()
+    }
+  }
+
+  _validateBatchingConfig () {
+    if (!this.conf.errorBatching.interval || this.conf.errorBatching.interval <= 0) {
+      throw new Error('errorBatching.interval is required and must be greater than 0')
+    }
+    if (!this.conf.errorBatching.maxMessageLength || this.conf.errorBatching.maxMessageLength <= 0) {
+      throw new Error('errorBatching.maxMessageLength is required and must be greater than 0')
     }
   }
 
   _initErrorBatching () {
     this._errorBatchTimer = setInterval(() => {
       this._processBatchedErrors()
-    }, this.conf.errorBatching?.interval || 60000)
+    }, this.conf.errorBatching.interval)
 
     this._errorBatchTimer.unref()
   }
@@ -143,7 +153,7 @@ class GrcSlack extends Base {
     }
 
     try {
-      const errorGroups = new Map() // group errors by function name and channel
+      const errorGroups = new Map() // group errors by channel and source
 
       const allEntries = Object.values(this._errorBatch.cache.cache || {})
 
@@ -187,9 +197,11 @@ class GrcSlack extends Base {
     message += `*Summary:* ${totalErrors} errors across ${errors.length} types (${timeRange})\n\n`
 
     let truncated = false
-    for (const error of errors.slice(0, 10)) {
+    let i = 0
+    for (; i < errors.length; i++) {
       if (truncated) break
 
+      const error = errors[i]
       message += `• *${error.errorMessage}* (${error.count}x)\n`
       message += '  Payloads:\n'
 
@@ -199,8 +211,7 @@ class GrcSlack extends Base {
           payloadStr += `     Extras: ${JSON.stringify(item.extras)}\n`
         }
 
-        if (message.length + payloadStr.length > (this.conf.errorBatching?.maxMessageLength || 4000)) {
-          message += `\n... message truncated (${errors.length - errors.indexOf(error)} more error types)`
+        if (message.length + payloadStr.length > this.conf.errorBatching.maxMessageLength) {
           truncated = true
           break
         }
@@ -209,8 +220,8 @@ class GrcSlack extends Base {
       }
     }
 
-    if (errors.length > 10 && !truncated) {
-      message += `\n... and ${errors.length - 10} more error types`
+    if (truncated) {
+      message += `\n... message truncated (${errors.length - i} more error types)`
     }
 
     await this.logError(reqChannel, message)

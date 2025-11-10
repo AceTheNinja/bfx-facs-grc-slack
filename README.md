@@ -14,7 +14,6 @@ A facility that simplifies the integration of slack message service via greanche
     "env": "development",
     "errorBatching": { // optional
       "interval": 60000,
-      "maxSize": 50,
       "maxMessageLength": 4000
     }
   }

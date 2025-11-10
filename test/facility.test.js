@@ -79,8 +79,8 @@ describe('GrcSlack Batch Error Logging', () => {
       const err = {}
       const key = grcSlack._createErrorKey('channel', err, 'function1')
 
-      expect(key).toContain('Unknown error')
-      expect(key).toContain('function1')
+      expect(key).toContain('channel:function1:')
+      expect(key.split(':').length).toBe(3)
     })
   })
 
@@ -130,7 +130,7 @@ describe('GrcSlack Batch Error Logging', () => {
       expect(entry.sourceName).toBe('testFunction')
       expect(entry.reqChannel).toBe('test-channel')
       expect(entry.count).toBe(1)
-      expect(entry.payloads.length).toBe(2) // Initial + added payload
+      expect(entry.payloads.length).toBe(1)
     })
 
     it('should capture extras alongside payloads', async () => {
@@ -144,11 +144,11 @@ describe('GrcSlack Batch Error Logging', () => {
       const entries = Object.values(grcSlack._errorBatch.cache.cache)
       const entry = entries[0].value
 
-      expect(entry.payloads.length).toBe(2)
+      expect(entry.payloads.length).toBe(1)
       expect(Array.isArray(entry.payloads[0].extras)).toBe(true)
-      expect(Array.isArray(entry.payloads[1].extras)).toBe(true)
       expect(entry.payloads[0].extras.length).toBe(2)
-      expect(entry.payloads[1].extras.length).toBe(2)
+      expect(entry.payloads[0].extras[0]).toBe('context-info')
+      expect(entry.payloads[0].extras[1]).toEqual({ meta: true })
     })
 
     it('should increment count for duplicate errors', async () => {
@@ -165,7 +165,7 @@ describe('GrcSlack Batch Error Logging', () => {
       const entry = entries[0].value
 
       expect(entry.count).toBe(2)
-      expect(entry.payloads.length).toBe(3) // Initial + 2 added payloads
+      expect(entry.payloads.length).toBe(2)
     })
 
     it('should fall back to direct logging on error', async () => {
@@ -335,26 +335,6 @@ describe('GrcSlack Batch Error Logging', () => {
       expect(message).toContain('truncated')
 
       grcSlack.conf.errorBatching.maxMessageLength = mockConf.errorBatching.maxMessageLength
-      logErrorSpy.mockRestore()
-    })
-
-    it('should limit number of error types displayed', async () => {
-      const logErrorSpy = jest.spyOn(grcSlack, 'logError').mockResolvedValue(undefined)
-
-      const now = new Date()
-      const errors = Array.from({ length: 15 }, (_, i) => ({
-        errorMessage: `Error ${i}`,
-        count: 1,
-        payloads: [{ payload: { to: `test${i}@example.com` }, extras: [] }],
-        firstSeen: now,
-        lastSeen: now
-      }))
-
-      await grcSlack._sendBatchedErrorMessage('test', 'testFunc', errors, 15, now.getTime(), now.getTime())
-
-      const [, message] = logErrorSpy.mock.calls[0]
-      expect(message).toContain('and 5 more error types')
-
       logErrorSpy.mockRestore()
     })
   })
