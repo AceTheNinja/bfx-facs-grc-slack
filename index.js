@@ -104,25 +104,35 @@ class GrcSlack extends Base {
           payloads: [
             { payload, extras: extra }
           ],
-          count: 0,
+          count: 1,
           firstSeen: now,
           lastSeen: now
         }
         this._errorBatch.set(errorKey, errorEntry)
+        return
       }
 
       errorEntry.count++
       errorEntry.lastSeen = now
       errorEntry.payloads.push({ payload, extras: extra })
+
+      // Keep only the last 3 payloads
+      if (errorEntry.payloads.length > 3) {
+        errorEntry.payloads.shift()
+      }
     } catch (e) {
       console.error('Error batching failed, falling back to direct log', e)
       await this.logError(reqChannel, err, sourceName, payload, ...extra)
     }
   }
 
-  _createErrorKey (reqChannel, err, sourceName) {
+  _createErrorGroupKey (reqChannel, sourceName) {
+    return `${reqChannel}:${sourceName}`
+  }
+
+  _createErrorKey (reqChannel, err, sourceName = 'unknown') {
     const errorMsg = err?.message || 'Unknown error'
-    return `${reqChannel}:${sourceName}:${errorMsg}`
+    return this._createErrorGroupKey(reqChannel, sourceName) + `:${errorMsg}`
   }
 
   async _processBatchedErrors () {
@@ -136,7 +146,7 @@ class GrcSlack extends Base {
       const allEntries = Object.values(this._errorBatch.cache.cache || {})
 
       for (const { value: errorEntry } of allEntries) {
-        const groupKey = `${errorEntry.reqChannel}:${errorEntry.sourceName}`
+        const groupKey = this._createErrorGroupKey(errorEntry.reqChannel, errorEntry.sourceName)
         if (!errorsByFunctionNameAndChannel.has(groupKey)) {
           errorsByFunctionNameAndChannel.set(groupKey, [])
         }
@@ -145,8 +155,8 @@ class GrcSlack extends Base {
         errorsByFunctionNameAndChannel.get(groupKey).push({ errorKey, ...errorEntry })
       }
 
-      for (const [groupKey, errors] of errorsByFunctionNameAndChannel) {
-        const [reqChannel, sourceName] = groupKey.split(':')
+      for (const errors of errorsByFunctionNameAndChannel.values()) {
+        const { reqChannel, sourceName } = errors[0]
         await this._sendBatchedErrorMessage(reqChannel, sourceName, errors)
       }
     } catch (e) {
@@ -170,7 +180,7 @@ class GrcSlack extends Base {
       message += `• *${error.errorMessage}* (${error.count}x)\n`
       message += '  Payloads:\n'
 
-      for (const item of error.payloads.slice(0, 3)) {
+      for (const item of error.payloads) {
         let payloadStr = `    - ${JSON.stringify(item.payload)}\n`
         if (Array.isArray(item.extras) && item.extras.length) {
           payloadStr += `     Extras: ${JSON.stringify(item.extras)}\n`
@@ -183,10 +193,6 @@ class GrcSlack extends Base {
         }
 
         message += payloadStr
-      }
-
-      if (error.payloads.length > 3) {
-        message += `    ... and ${error.payloads.length - 3} more payloads\n`
       }
     }
 
